@@ -73,6 +73,8 @@ Android 6.0+ 可直接安装，也可以直接在浏览器里打开网页版。
 |---|---|---|
 | ![shelf](app/apk/preview/shelf.png) | ![read](app/apk/preview/read.png) | ![night](app/apk/preview/night.png) |
 
+> 截图里读的都是内置的公版示例《道德经》节选。
+
 | 目录耗时 | 章末小结 | 阅读时光 |
 |---|---|---|
 | ![toc](app/apk/preview/toc-time.png) | ![endnote](app/apk/preview/endnote.png) | ![stats](app/apk/preview/stats.png) |
