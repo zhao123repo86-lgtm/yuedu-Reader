@@ -28,6 +28,7 @@ const state = {
   chromeOn: true,
   etaMode: 0,           // 0 本章 / 1 全书 / 2 速度
   chapStartChars: 0,    // 本章起始偏移（字数）
+  pageAnchors: [],      // 第 n 页的起始字符偏移（翻页模式）
 };
 
 /* ════════ IndexedDB（导入的书） ════════ */
@@ -78,8 +79,22 @@ const DB = (() => {
 })();
 
 /* ════════ 设置 ════════ */
-const DEFAULTS = { fs: 17, lh: 188, pad: 28, font: 'system', theme: 'paper' };
+const DEFAULTS = {
+  fs: 17, lh: 188, pad: 28, font: 'system',
+  theme: 'paper',     // auto | paper | warm | night | oled
+  mode: 'scroll',     // scroll 滑动 ｜ page 翻页
+  autoSpeed: 42,      // 自动滚动速度 px/秒
+};
 let settings = { ...DEFAULTS, ...JSON.parse(localStorage.getItem(LS.settings) || '{}') };
+
+const THEME_BG = { paper: '#F7F6F2', warm: '#F6F0E2', night: '#14130F', oled: '#000000' };
+const mqDark = window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)') : null;
+
+/** 跟随系统时，把 auto 解析成实际主题 */
+function resolvedTheme() {
+  if (settings.theme !== 'auto') return settings.theme;
+  return (mqDark && mqDark.matches) ? 'night' : 'paper';
+}
 
 function applySettings() {
   const root = document.documentElement;
@@ -90,16 +105,22 @@ function applySettings() {
     settings.font === 'sans'   ? 'var(--font-ui)' :
     settings.font === 'kai'    ? 'var(--font-kai)' :
     settings.font === 'serif'  ? 'var(--font-read)' : 'var(--font-system)');
-  root.dataset.theme = settings.theme;
+
+  const theme = resolvedTheme();
+  root.dataset.theme = theme;
+  if (theme === 'night' || theme === 'oled') root.setAttribute('data-dark', '1');
+  else root.removeAttribute('data-dark');
 
   $('#fontVal').textContent = settings.fs;
   $('#lineRange').value = settings.lh;
   $('#padRange').value = settings.pad;
   $$('#fontSeg button').forEach(b => b.classList.toggle('on', b.dataset.font === settings.font));
   $$('#themeSeg button').forEach(b => b.classList.toggle('on', b.dataset.theme === settings.theme));
+  $$('#modeSeg button').forEach(b => b.classList.toggle('on', b.dataset.mode === settings.mode));
 
-  const meta = { paper: '#F7F6F2', warm: '#F6F0E2', night: '#14130F' }[settings.theme];
-  $('meta[name=theme-color]').setAttribute('content', meta);
+  const bg = THEME_BG[theme] || THEME_BG.paper;
+  $('meta[name=theme-color]').setAttribute('content', bg);
+  try { window.NativeBridge?.setTheme(theme, bg, theme === 'night' || theme === 'oled'); } catch {}
   localStorage.setItem(LS.settings, JSON.stringify(settings));
 }
 
@@ -108,7 +129,18 @@ const progress = JSON.parse(localStorage.getItem(LS.progress) || '{}');
 const saveProgress = () => localStorage.setItem(LS.progress, JSON.stringify(progress));
 
 /* ════════ 分章 ════════ */
-const CH_TITLE = /^(?:第[0-9零一二三四五六七八九十百千万两]+[章节回幕部]|序幕|序章|楔子|尾声|后记|番外|前传|终章|番外篇)/;
+const CH_TITLE = /^(?:第[0-9０-９零一二三四五六七八九十百千万两]+[章节回幕部篇卷]|Chapter\s*[0-9]+|序章|序幕|楔子|引子|尾声|终章|后记|番外|前传)/i;
+
+/**
+ * 这一行算不算标题。
+ * 光看正则会把“第一章里……”这种正文句子也当成章名，
+ * 所以再加两道：不能过长，不能带标点。
+ */
+function isHeading(s) {
+  if (!s || s.length > 32) return false;
+  if (/[。！？；：，、]/.test(s)) return false;
+  return CH_TITLE.test(s);
+}
 
 function splitChapters(text) {
   const lines = text.split(/\r?\n/);
@@ -121,7 +153,7 @@ function splitChapters(text) {
   for (let i = 0; i < lines.length; i++) {
     const raw = lines[i];
     const s = raw.trim();
-    const match = s.length > 0 && s.length <= 40 && CH_TITLE.test(s);
+    const match = s.length > 0 && isHeading(s);
     if (match) {
       if (cur) { cur.end = offsets[i]; chapters.push(cur); }
       cur = { title: s, start: offsets[i], end: text.length };
@@ -132,11 +164,192 @@ function splitChapters(text) {
   return chapters;
 }
 
+/**
+ * 导入时一次性清洗：结果落库，之后字符偏移永远稳定。
+ * 做四件事：去 BOM / 统一换行 / 去零宽字符 / 合并多余空行 + 去分隔线。
+ * 缩进交给 CSS text-indent，不往正文里塞全角空格（那会污染偏移量）。
+ */
+function cleanText(raw) {
+  const t = String(raw)
+    .replace(/^\uFEFF/, '')
+    .replace(/\r\n?/g, '\n')
+    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, '')
+    .replace(/[\u200B-\u200D\u2060\uFEFF]/g, '');
+
+  const out = [];
+  let pendingBlank = false;
+  for (const line of t.split('\n')) {
+    const s = line.replace(/^[\s\u3000]+|[\s\u3000]+$/g, '');
+    if (!s) { pendingBlank = true; continue; }
+    if (/^[=\-*~·—─＿_#]{3,}$/.test(s)) continue;      // 分隔线
+    if (pendingBlank && out.length) out.push('');
+    pendingBlank = false;
+    out.push(s);
+  }
+  return out.join('\n');
+}
+
+/** EPUB 章节列表 → 全书文本 + 章节偏移（偏移在拼接当场算好，之后不再变） */
+function textFromEpubChapters(list) {
+  let text = '';
+  const chapters = [];
+  for (const c of list) {
+    const body = String(c.text || '').trim();
+    if (!body) continue;
+    const title = String(c.title || '').trim() || `第 ${chapters.length + 1} 节`;
+    const start = text.length;
+    text += title + '\n\n' + body + '\n\n';
+    chapters.push({ title, start, end: text.length });
+  }
+  if (!chapters.length) chapters.push({ title: '正文', start: 0, end: text.length });
+  return { text, chapters };
+}
+
+/* ════════ 视图模式：滑动 / 翻页 ════════ */
+const isPaged = () => settings.mode === 'page';
+
+function pageWidth() {
+  const sc = $('#pageScroll');
+  return sc.clientWidth || window.innerWidth || 1;
+}
+
+/**
+ * 分页度量：column-width = 视口宽 − 2×边距，column-gap = 2×边距。
+ * 这样每一栏的“周期”恰好等于视口宽，scrollLeft = 页号 × 视口宽 就是整页对齐。
+ * 文字流、避头尾、字号重排全部交给浏览器，不自己算断页。
+ */
+function applyPagedMetrics() {
+  const page = $('#page');
+  if (!isPaged()) {
+    page.style.columnWidth = '';
+    page.style.columnGap = '';
+    return;
+  }
+  const pad = settings.pad;
+  page.style.columnWidth = Math.max(120, pageWidth() - pad * 2) + 'px';
+  page.style.columnGap = (pad * 2) + 'px';
+}
+
+function pageCount() {
+  if (!isPaged()) return 1;
+  const W = pageWidth();
+  return Math.max(1, Math.round($('#pageScroll').scrollWidth / W));
+}
+
+function currentPageIndex() {
+  if (!isPaged()) return 0;
+  return Math.max(0, Math.min(pageCount() - 1, Math.round($('#pageScroll').scrollLeft / pageWidth())));
+}
+
+/** 每页的起始字符偏移（重排后用，帧内 O(1) 取值） */
+function buildPageAnchors() {
+  state.pageAnchors = [];
+  if (!isPaged()) return;
+  const W = pageWidth();
+  const origin = $('#page').getBoundingClientRect().left;
+  for (const p of $$('#page p')) {
+    const off = parseInt(p.dataset.off, 10) || 0;
+    for (const r of p.getClientRects()) {
+      const idx = Math.max(0, Math.round((r.left - origin) / W));
+      if (state.pageAnchors[idx] == null || off < state.pageAnchors[idx]) state.pageAnchors[idx] = off;
+    }
+  }
+}
+
+const paraByOffset = (off) => {
+  let target = null;
+  for (const p of $$('#page p')) {
+    const o = parseInt(p.dataset.off, 10) || 0;
+    if (o <= off) target = p; else break;
+  }
+  return target;
+};
+
+/** 落回某个字符偏移：分页就翻到那一页，滑动就滚到那一段 */
+function locateOffset(off) {
+  const sc = $('#pageScroll');
+  const target = paraByOffset(off);
+  if (!target) { sc.scrollTop = 0; sc.scrollLeft = 0; return; }
+
+  if (isPaged()) {
+    const W = pageWidth();
+    const rects = target.getClientRects();
+    if (!rects.length) return;
+    const idx = Math.max(0, Math.round((rects[0].left - $('#page').getBoundingClientRect().left) / W));
+    sc.scrollLeft = idx * W;
+  } else {
+    const r = target.getBoundingClientRect();
+    sc.scrollTop = Math.max(0, sc.scrollTop + r.top - sc.getBoundingClientRect().top - 96);
+  }
+}
+
+/** 当前阅读位置对应的字符偏移（进度的唯一真相） */
+let anchorMemo = { key: '', val: 0 };
+function currentAnchor() {
+  const sc = $('#pageScroll');
+  // 同一帧里 updateProgressUI 和 refreshBmBtn 会各问一次，用位置做 key 记一下
+  const key = `${state.idx}|${sc.scrollTop}|${sc.scrollLeft}|${sc.scrollHeight}|${sc.scrollWidth}`;
+  if (anchorMemo.key === key) return anchorMemo.val;
+
+  const fallback = state.chapters[state.idx]?.start || 0;
+  let val;
+  if (isPaged()) {
+    const a = state.pageAnchors && state.pageAnchors[currentPageIndex()];
+    val = a != null ? a : fallback;
+  } else {
+    const y = sc.scrollTop + sc.clientHeight * 0.28;
+    const pageTop = $('#page').offsetTop;
+    let best = null;
+    for (const p of $$('#page p')) {
+      if (p.offsetTop - pageTop <= y) best = p; else break;
+    }
+    val = best ? (parseInt(best.dataset.off, 10) || 0) : fallback;
+  }
+  anchorMemo.key = key;
+  anchorMemo.val = val;
+  return val;
+}
+
+/** 阅读进度比例（0–1），两种模式各有各的算法 */
+function scrollRatio() {
+  const sc = $('#pageScroll');
+  if (isPaged()) {
+    const n = pageCount();
+    return n <= 1 ? 0 : currentPageIndex() / (n - 1);
+  }
+  const max = sc.scrollHeight - sc.clientHeight;
+  return max > 0 ? Math.min(1, Math.max(0, sc.scrollTop / max)) : 0;
+}
+
+/** 打完这一章后把位置摆对：anchor 可以是字符偏移、0 或 'end' */
+function layoutChapter(anchor) {
+  const sc = $('#pageScroll');
+  sc.scrollTop = 0;
+  sc.scrollLeft = 0;
+
+  const place = () => {
+    if (isPaged()) {
+      applyPagedMetrics();
+      buildPageAnchors();
+      if (anchor === 'end') sc.scrollLeft = (pageCount() - 1) * pageWidth();
+      else if (anchor) locateOffset(anchor);
+    } else if (anchor === 'end') {
+      sc.scrollTop = sc.scrollHeight;
+    } else if (anchor) {
+      locateOffset(anchor);
+    }
+  };
+
+  place();
+  requestAnimationFrame(place);      // 字体/列宽落定后再校一次
+}
+
 /* ════════ 渲染正文 ════════ */
-function renderChapter(i) {
+function renderChapter(i, anchor = 0) {
   const ch = state.chapters[i];
   if (!ch) return;
   state.idx = i;
+  anchorMemo = { key: '', val: 0 };
 
   const body = state.text.slice(ch.start, ch.end);
   const frag = document.createDocumentFragment();
@@ -147,14 +360,14 @@ function renderChapter(i) {
     const lineStart = cursor;
     cursor += raw.length + 1;         // 换行符占 1
     if (!s) continue;
-    if (s.length <= 40 && CH_TITLE.test(s)) {
+    if (isHeading(s)) {
       const h = document.createElement('div');
       h.className = 'ch-head';
       h.textContent = s;
       frag.appendChild(h);
       continue;
     }
-    if (/^[=\-*~·—]{3,}$/.test(s)) continue;
+    if (/^[=\-*~·\u2014]{3,}$/.test(s)) continue;
     const p = document.createElement('p');
     p.textContent = s;
     p.dataset.off = lineStart + raw.indexOf(s);   // 段首在全书中的偏移
@@ -162,16 +375,36 @@ function renderChapter(i) {
   }
 
   const page = $('#page');
+  const cap = $('#endCap');
+  if (cap && cap.parentElement === page) page.after(cap);   // 先摘出来，否则会被 replaceChildren 吃掉
   page.replaceChildren(frag);
+  if (isPaged() && cap) page.appendChild(cap);              // 翻页模式：章末并入最后一栅
 
   $('#rChapterTitle').textContent = ch.title;
   $('#rBookTitle').textContent = state.book.title || '';
 
-  // 章末按钮
-  const cap = $('#endCap');
-  cap.replaceChildren();
+  buildEndCap();
 
-  // 章末小结（上次读完本章的记录）
+  // ── 时间引擎：本章起始字数 + 计时 ──
+  state.chapStartChars = state.chapCharsBefore(i);
+  Pace.resetChapter(state.chapChars(i));
+
+  layoutChapter(anchor);
+
+  updateProgressUI();
+  renderTocCurrent();
+  markLastRead();
+  refreshBmBtn();
+  maybeSleepNudge();
+}
+
+/** 章末那块：上次读完记录 + 下一章按钮 */
+function buildEndCap() {
+  const cap = $('#endCap');
+  if (!cap) return;
+  cap.replaceChildren();
+  const i = state.idx;
+
   const rec = chapterRecs[`${state.book?.id}|${i}`];
   if (rec && rec.ms > 15000) {
     const note = document.createElement('div');
@@ -187,18 +420,6 @@ function renderChapter(i) {
   btn.textContent = isLast ? '全书完' : '下一章';
   if (!isLast) btn.onclick = () => nextChapter();
   cap.appendChild(btn);
-
-  // ── 时间引擎：本章起始字数 + 计时 ──
-  state.chapStartChars = state.chapCharsBefore(i);
-  const chapChars = state.chapChars(i);
-  Pace.resetChapter(chapChars);
-
-  $('#pageScroll').scrollTop = 0;
-  updateProgressUI();
-  renderTocCurrent();
-  markLastRead();
-  refreshBmBtn();
-  maybeSleepNudge();
 }
 
 
@@ -208,25 +429,13 @@ let bookmarks = JSON.parse(localStorage.getItem(LS.bookmarks) || '{}');
 function saveMarks() { localStorage.setItem(LS.bookmarks, JSON.stringify(bookmarks)); }
 function marksOf(id) { return bookmarks[id] || (bookmarks[id] = []); }
 
-/** 当前阅读位置对应的段落 */
+/** 当前阅读位置对应的段落（书签锚点用） */
 function currentPara() {
-  const sc = $('#pageScroll');
-  const line = parseInt(getComputedStyle($('#page')).lineHeight) || 32;
-  const y = sc.scrollTop + sc.clientHeight * 0.28;   // 取视野上三分之一处作为"当前位置"
-  const ps = $$('#page p');
-  let best = ps[0] || null;
-  for (const p of ps) {
-    const top = p.offsetTop - $('#page').offsetTop;
-    if (top <= y) best = p; else break;
-  }
-  return best;
+  return paraByOffset(currentAnchor());
 }
 
 function currentOffset() {
-  const p = currentPara();
-  if (p) return parseInt(p.dataset.off, 10) || 0;
-  const ch = state.chapters[state.idx];
-  return ch ? ch.start : 0;
+  return currentAnchor();
 }
 
 function offsetChapter(off) {
@@ -284,17 +493,23 @@ function toggleBookmark() {
 /** 跳到书签位置，并把命中的那一段闪一下 */
 function gotoMark(m) {
   const idx = (m.ch != null && state.chapters[m.ch]) ? m.ch : offsetChapter(m.off);
-  goChapter(idx);
+  goChapter(idx, isPaged() ? m.off : 0);
   requestAnimationFrame(() => {
     const ps = $$('#page p');
-    const hit = ps.find(p => (parseInt(p.dataset.off, 10) || 0) === m.off)
-             || ps.find(p => Math.abs((parseInt(p.dataset.off, 10) || 0) - m.off) < 200);
-    if (hit) {
+    let hit = paraByOffset(m.off);
+    if (!hit) hit = ps.find(p => Math.abs((parseInt(p.dataset.off, 10) || 0) - m.off) < 200);
+    if (!hit) return;
+
+    if (isPaged()) {
+      locateOffset(parseInt(hit.dataset.off, 10) || m.off);
+    } else {
       const sc = $('#pageScroll');
       sc.scrollTop += hit.getBoundingClientRect().top - sc.getBoundingClientRect().top - 120;
-      hit.classList.add('bm-flash');
-      setTimeout(() => hit.classList.remove('bm-flash'), 1700);
+      updateProgressUI();
     }
+
+    hit.classList.add('bm-flash');
+    setTimeout(() => hit.classList.remove('bm-flash'), 1700);
   });
 }
 
@@ -395,12 +610,9 @@ state.chapCharsBefore = (i) => {
   return n;
 };
 
-// 当前已读字符数（估算：按滚动比例 × 本章字数）
+// 当前已读字符数（按滚动/翻页比例 × 本章字数）
 function readCharsInChapter() {
-  const sc = $('#pageScroll');
-  const max = sc.scrollHeight - sc.clientHeight;
-  const r = max > 0 ? Math.min(1, Math.max(0, sc.scrollTop / max)) : 0;
-  return chapChars(state.idx) * r;
+  return chapChars(state.idx) * scrollRatio();
 }
 
 function currentWpm() {
@@ -467,20 +679,56 @@ function nextChapter() {
   goChapter(i + 1, 0);
 }
 
+/* 翻到上一章：落在上一章末尾 */
+function prevChapter(landAtEnd = false) {
+  if (state.idx <= 0) { toast('已经是开头了', 1200); return; }
+  Pace.flush(state.book?.id);
+  goChapter(state.idx - 1, landAtEnd ? 'end' : 0);
+}
+
+/* ════════ 翻页 / 滚动推进 ════════ */
+function nextPage() {
+  const sc = $('#pageScroll');
+  if (!isPaged()) {
+    const max = sc.scrollHeight - sc.clientHeight;
+    if (sc.scrollTop >= max - 2) return nextChapter();
+    sc.scrollTop = Math.min(max, sc.scrollTop + sc.clientHeight * 0.88);
+    return;
+  }
+  const i = currentPageIndex();
+  if (i >= pageCount() - 1) return nextChapter();
+  sc.scrollLeft = (i + 1) * pageWidth();
+}
+
+function prevPage() {
+  const sc = $('#pageScroll');
+  if (!isPaged()) {
+    if (sc.scrollTop <= 2) return prevChapter(true);
+    sc.scrollTop = Math.max(0, sc.scrollTop - sc.clientHeight * 0.88);
+    return;
+  }
+  const i = currentPageIndex();
+  if (i <= 0) return prevChapter(true);
+  sc.scrollLeft = (i - 1) * pageWidth();
+}
+
+const toggleChrome = () => showChrome(!state.chromeOn);
+
 /* ════════ 打开书 ════════ */
 async function openBook(id) {
   const meta = state.books.find(b => b.id === id);
   if (!meta) return;
+  if (auto.on) stopAuto(true);
 
   $('#shelf').hidden = true;
   $('#reader').hidden = false;
   $('#page').innerHTML = '<p style="text-indent:0;color:var(--text-3)">载入中…</p>';
 
-  let text = '';
+  let text = '', storedChapters = meta.chapters || null;
   if (meta.text) text = meta.text;
   else {
     const rec = await DB.get(meta.id);
-    if (rec) text = rec.text;
+    if (rec) { text = rec.text; storedChapters = rec.chapters || null; }
     else if (window.NativeBridge?.readBook) text = await NativeBridge.readBook(meta.file);
     else {
       const res = await fetch(encodeURI(meta.file));
@@ -490,24 +738,35 @@ async function openBook(id) {
 
   state.book = meta;
   state.text = text;
-  state.chapters = splitChapters(text);
+  state.chapters = storedChapters
+    ? storedChapters.map(c => ({ title: c.title, start: c.start, end: c.end == null ? text.length : c.end }))
+    : splitChapters(text);
   meta.chars = text.length;
 
+  /* 恢复位置：优先字符偏移，兼容旧的章+比例记录 */
   const p = progress[meta.id];
-  const startIdx = p && p.chapter < state.chapters.length ? p.chapter : 0;
+  let startIdx = 0, anchor = 0;
+  if (p) {
+    if (p.off != null) {
+      startIdx = offsetChapter(p.off);
+      anchor = p.off;
+    } else if (p.chapter != null && p.chapter < state.chapters.length) {
+      startIdx = p.chapter;
+      const c = state.chapters[p.chapter];
+      anchor = Math.round(c.start + (c.end - c.start) * (p.ratio || 0));
+    }
+  }
 
   $('#rBookTitle').textContent = meta.title;
   buildToc();
   renderBookmarks();
-  renderChapter(startIdx);
+  renderChapter(startIdx, anchor);
   showChrome(true);
 }
 
-function goChapter(i, ratio = 0) {
+function goChapter(i, anchor = 0) {
   if (i < 0 || i >= state.chapters.length) return;
-  renderChapter(i);
-  const sc = $('#pageScroll');
-  if (ratio) requestAnimationFrame(() => { sc.scrollTop = (sc.scrollHeight - sc.clientHeight) * ratio; });
+  renderChapter(i, anchor);
 }
 
 /* ════════ 工具栏 ════════ */
@@ -517,19 +776,178 @@ function showChrome(on) {
   $('#chromeBottom').classList.toggle('hide', !on);
 }
 
+/* ════════ 视图模式切换 ════════ */
+function applyMode(anchor) {
+  const paged = isPaged();
+  const sc = $('#pageScroll');
+  sc.classList.toggle('paged', paged);
+
+  const cap = $('#endCap'), page = $('#page');
+  if (!paged && cap && cap.parentElement === page) page.after(cap);
+
+  if (!state.book) return;
+  renderChapter(state.idx, anchor == null ? currentAnchor() : anchor);
+}
+
+/** 切模式：先把旧模式下的位置取出来，再改，再重建 */
+function setMode(mode) {
+  if (settings.mode === mode) return;
+  const anchor = state.book ? currentAnchor() : 0;
+  if (auto.on) stopAuto(true);
+  settings.mode = mode;
+  applySettings();
+  applyMode(anchor);
+}
+
+/** 改字号/行距/边距后重排，位置不丢 */
+function changeLayout(mutate) {
+  const anchor = state.book ? currentAnchor() : 0;
+  mutate();
+  applySettings();
+  if (state.book) renderChapter(state.idx, anchor);
+}
+
+/* ════════ 自动滚动 ════════ */
+const AUTO_MIN = 8, AUTO_MAX = 180;
+const auto = {
+  on: false, paused: false, flipping: false,
+  speed: 42, acc: 0, last: 0, raf: 0, resumeTimer: 0,
+};
+
+/* Pace 只认 scrollTop/scrollHeight/clientHeight，这里给它一个横向适配的替身 */
+const paceView = {
+  get scrollTop()    { return isPaged() ? $('#pageScroll').scrollLeft : $('#pageScroll').scrollTop; },
+  get scrollHeight() { return isPaged() ? $('#pageScroll').scrollWidth : $('#pageScroll').scrollHeight; },
+  get clientHeight() { return isPaged() ? $('#pageScroll').clientWidth : $('#pageScroll').clientHeight; },
+  get innerText()    { return $('#page').innerText; },
+};
+
+function setAutoSpeed(v) {
+  auto.speed = Math.max(AUTO_MIN, Math.min(AUTO_MAX, Math.round(v)));
+  settings.autoSpeed = auto.speed;
+  localStorage.setItem(LS.settings, JSON.stringify(settings));
+  $('#autoSpeed').textContent = auto.speed;
+  const bar = $('#autoBar');
+  bar.classList.add('bump');
+  setTimeout(() => bar.classList.remove('bump'), 200);
+}
+
+function renderAutoBtn() {
+  $('#autoBtn').classList.toggle('on', auto.on);
+  $('#autoPause').classList.toggle('paused', auto.paused);
+  $('#autoPause').setAttribute('aria-label', auto.paused ? '继续' : '暂停');
+  $('#autoPause').innerHTML = auto.paused
+    ? '<svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5l11 7-11 7z"/></svg>'
+    : '<svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><rect x="7" y="5" width="3.5" height="14" rx="1"/><rect x="13.5" y="5" width="3.5" height="14" rx="1"/></svg>';
+}
+
+function startAuto() {
+  if (isPaged()) {
+    toast('自动读只对滑动模式有效，已替你切过来', 2400);
+    setMode('scroll');
+  }
+  if (auto.on) return;
+  auto.on = true;
+  auto.paused = false;
+  auto.flipping = false;
+  auto.acc = 0;
+  auto.last = 0;
+  setAutoSpeed(settings.autoSpeed || 42);
+  $('#autoBar').hidden = false;
+  renderAutoBtn();
+  auto.raf = requestAnimationFrame(tickAuto);
+}
+
+function stopAuto(silent) {
+  if (!auto.on) return;
+  auto.on = false;
+  auto.paused = false;
+  cancelAnimationFrame(auto.raf);
+  clearTimeout(auto.resumeTimer);
+  $('#autoBar').hidden = true;
+  renderAutoBtn();
+  if (!silent) toast('已停止自动滚动', 1400);
+}
+
+/** 手势干预：碰到屏幕就暂停，手离开 3 秒后自己回来 */
+function pauseAuto() {
+  if (!auto.on) return;
+  if (!auto.paused) { auto.paused = true; renderAutoBtn(); }
+  clearTimeout(auto.resumeTimer);
+  auto.resumeTimer = setTimeout(() => {
+    if (auto.on && auto.paused) { auto.paused = false; renderAutoBtn(); }
+  }, 3000);
+}
+
+function resumeAuto() {
+  clearTimeout(auto.resumeTimer);
+  if (!auto.on) return;
+  auto.paused = false;
+  renderAutoBtn();
+}
+
+function tickAuto(t) {
+  if (!auto.on) return;
+  const now = t || performance.now();
+  if (!auto.last) auto.last = now;
+  const dt = Math.min(120, now - auto.last);   // 从后台回来不要一下跳一大段
+  auto.last = now;
+  const sc = $('#pageScroll');
+
+  if (!auto.paused && !auto.flipping) {
+    auto.acc += auto.speed * dt / 1000;
+    const dy = Math.floor(auto.acc);
+    if (dy > 0) { auto.acc -= dy; sc.scrollTop += dy; }
+
+    const max = sc.scrollHeight - sc.clientHeight;
+    if (sc.scrollTop >= max - 1) {
+      if (state.idx >= state.chapters.length - 1) {
+        stopAuto();
+        toast('全书读完了', 1800);
+        return;
+      }
+      auto.flipping = true;                     // 章末停一下再翻，不然太刀了
+      setTimeout(() => {
+        if (!auto.on) return;
+        auto.flipping = false;
+        auto.acc = 0;
+        nextChapter();
+      }, 1000);
+    }
+  }
+  auto.raf = requestAnimationFrame(tickAuto);
+}
+
+/* 触摸 / 滚轮 → 暂停 */
+for (const ev of ['pointerdown', 'touchstart', 'touchmove', 'wheel']) {
+  $('#pageScroll').addEventListener(ev, pauseAuto, { passive: true });
+}
+$('#autoPause').onclick = () => { auto.paused ? resumeAuto() : pauseAuto(); };
+$('#autoSlower').onclick = () => setAutoSpeed(auto.speed - 8);
+$('#autoFaster').onclick = () => setAutoSpeed(auto.speed + 8);
+$('#autoClose').onclick = () => stopAuto();
+$('#autoBtn').onclick = () => { auto.on ? stopAuto() : startAuto(); };
+
 /* ════════ 进度 UI ════════ */
 function updateProgressUI() {
-  const sc = $('#pageScroll');
-  const max = sc.scrollHeight - sc.clientHeight;
-  const r = max > 0 ? Math.min(1, sc.scrollTop / max) : 0;
-
+  const r = scrollRatio();
   const pct = Math.round(r * 100);
-  $('#progressLabel').textContent = `${state.idx + 1} / ${state.chapters.length} 章`;
+  const paged = isPaged();
+
+  $('#progressLabel').textContent = paged
+    ? `第 ${state.idx + 1}/${state.chapters.length} 章 · ${currentPageIndex() + 1}/${pageCount()} 页`
+    : `${state.idx + 1} / ${state.chapters.length} 章`;
   $('#progressFill').style.width = pct + '%';
   renderEta();
 
   if (state.book) {
-    progress[state.book.id] = { chapter: state.idx, ratio: r, at: Date.now() };
+    progress[state.book.id] = {
+      off: currentAnchor(),          // 字符偏移：字号、模式、边距怎么变都不会丢
+      chapter: state.idx,
+      ratio: r,
+      page: paged ? currentPageIndex() : 0,
+      at: Date.now(),
+    };
     saveProgress();
     markLastRead();
   }
@@ -563,6 +981,7 @@ $('#etaLabel').onclick = (e) => {
 };
 
 let rafPending = false;
+let snapTimer = 0;
 $('#pageScroll').addEventListener('scroll', () => {
   if (rafPending) return;
   rafPending = true;
@@ -570,7 +989,19 @@ $('#pageScroll').addEventListener('scroll', () => {
     rafPending = false;
     updateProgressUI();
     refreshBmBtn();
-    if (state.book) Pace.onScroll($('#pageScroll'), state.book.id);
+    // 自动落是机速不是人速，不计入 WPM 样本，免得污染你自己的阅读速度
+    if (state.book && !auto.on) Pace.onScroll(paceView, state.book.id);
+
+    // 翻页模式：手指拖到半页时，停下来自己吸附到最近的页
+    if (isPaged()) {
+      clearTimeout(snapTimer);
+      snapTimer = setTimeout(() => {
+        const sc = $('#pageScroll');
+        const W = pageWidth();
+        const target = Math.round(sc.scrollLeft / W) * W;
+        if (Math.abs(sc.scrollLeft - target) > 1) sc.scrollLeft = target;
+      }, 170);
+    }
   });
 }, { passive: true });
 
@@ -652,12 +1083,13 @@ function closeSheet() {
   setTimeout(() => { s.hidden = true; s.classList.remove('closing'); $('#sheetMask').hidden = true; }, 220);
 }
 
-$('#fontMinus').onclick = () => { settings.fs = Math.max(13, settings.fs - 1); applySettings(); };
-$('#fontPlus').onclick  = () => { settings.fs = Math.min(28, settings.fs + 1); applySettings(); };
-$('#lineRange').oninput = e => { settings.lh = +e.target.value; applySettings(); };
-$('#padRange').oninput  = e => { settings.pad = +e.target.value; applySettings(); };
-$$('#fontSeg button').forEach(b => b.onclick = () => { settings.font = b.dataset.font; applySettings(); });
+$('#fontMinus').onclick = () => changeLayout(() => { settings.fs = Math.max(13, settings.fs - 1); });
+$('#fontPlus').onclick  = () => changeLayout(() => { settings.fs = Math.min(28, settings.fs + 1); });
+$('#lineRange').oninput = e => changeLayout(() => { settings.lh = +e.target.value; });
+$('#padRange').oninput  = e => changeLayout(() => { settings.pad = +e.target.value; });
+$$('#fontSeg button').forEach(b => b.onclick = () => changeLayout(() => { settings.font = b.dataset.font; }));
 $$('#themeSeg button').forEach(b => b.onclick = () => { settings.theme = b.dataset.theme; applySettings(); });
+$$('#modeSeg button').forEach(b => b.onclick = () => setMode(b.dataset.mode));
 
 /* ════════ 书架 ════════ */
 function fmtChars(n) {
@@ -761,6 +1193,27 @@ function renderShelf() {
 /* ════════ 初始化 ════════ */
 async function init() {
   applySettings();
+  applyMode();                      // 先按设置把滑动/翻页的骨架搭好
+
+  // 跟随系统：系统明暗变了就重算
+  if (mqDark) {
+    const onScheme = () => { if (settings.theme === 'auto') applySettings(); };
+    if (mqDark.addEventListener) mqDark.addEventListener('change', onScheme);
+    else if (mqDark.addListener) mqDark.addListener(onScheme);
+  }
+
+  // 转屏 / 改窗口：重排并回到原位置
+  let resizeTimer = 0;
+  window.addEventListener('resize', () => {
+    if (!state.book) return;
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(() => {
+      const anchor = currentAnchor();
+      if (isPaged()) { applyPagedMetrics(); buildPageAnchors(); }
+      locateOffset(anchor);
+      updateProgressUI();
+    }, 160);
+  });
 
   // 内置书（字数在打开后回填）
   state.books = BUILTIN.map(b => ({ ...b }));
@@ -769,10 +1222,11 @@ async function init() {
   // 导入过的书
   const imported = await DB.all().catch(() => []);
   for (const rec of imported) {
-    state.books.push({ id: rec.id, title: rec.title, author: rec.author || '导入', chars: rec.text.length, text: rec.text });
+    state.books.push({
+      id: rec.id, title: rec.title, author: rec.author || '导入',
+      chars: rec.text.length, text: rec.text, chapters: rec.chapters || null,
+    });
   }
-
-  renderShelf();
 
   renderShelf();
 }
@@ -829,6 +1283,8 @@ $('#continueBtn').onclick = () => {
 
 /* ════════ 事件绑定 ════════ */
 $('#backBtn').onclick = () => {
+  if (auto.on) stopAuto(true);      // 否则它会继续滚一个已经藏起来的容器
+  Pace.flush(state.book?.id);
   $('#reader').hidden = true;
   $('#shelf').hidden = false;
   state.book = null;
@@ -936,30 +1392,71 @@ $('#chromeBottom').onclick = (e) => {
 };
 
 $('#importBtn').onclick = () => $('#fileInput').click();
+
+/* 老 WebView 没有 Blob.arrayBuffer()/text()，用 FileReader 兜底 */
+function readAsArrayBuffer(f) {
+  if (f.arrayBuffer) return f.arrayBuffer();
+  return new Promise((res, rej) => {
+    const r = new FileReader();
+    r.onload = () => res(r.result);
+    r.onerror = () => rej(r.error || new Error('读取失败'));
+    r.readAsArrayBuffer(f);
+  });
+}
+function readAsText(f) {
+  if (f.text) return f.text();
+  return new Promise((res, rej) => {
+    const r = new FileReader();
+    r.onload = () => res(String(r.result));
+    r.onerror = () => rej(r.error || new Error('读取失败'));
+    r.readAsText(f, 'utf-8');
+  });
+}
+
 $('#fileInput').onchange = async e => {
   const files = [...(e.target.files || [])];
   if (!files.length) return;
   setImporting(true);
-  let ok = 0;
+  let ok = 0, bad = 0, lastError = '';
   for (const f of files) {
     try {
-      const raw = await f.text();
-      // 去掉 BOM，统一换行
-      const text = raw.replace(/^\uFEFF/, '').replace(/\r\n?/g, '\n');
-      if (!text.trim()) continue;
+      const isEpub = /\.epub$/i.test(f.name) || f.type === 'application/epub+zip';
       const id = 'u-' + Date.now() + '-' + Math.random().toString(36).slice(2, 7);
-      const title = f.name.replace(/\.(txt|text)$/i, '');
-      await DB.put({ id, title, author: '本地导入', text });
-      state.books.push({ id, title, author: '本地导入', chars: text.length, text });
+      let title, author, text, chapters = null;
+
+      if (isEpub) {
+        const book = await Epub.parse(await readAsArrayBuffer(f));
+        const built = textFromEpubChapters(book.chapters);
+        text = built.text;
+        chapters = built.chapters;
+        title = book.title || f.name.replace(/\.[^.]+$/, '');
+        author = book.author || 'EPUB';
+      } else {
+        text = cleanText(await readAsText(f));
+        title = f.name.replace(/\.(txt|text)$/i, '');
+        author = '本地导入';
+      }
+
+      if (!text.trim()) { bad++; lastError = '没有可读的正文'; continue; }
+
+      const rec = { id, title, author, text };
+      if (chapters) rec.chapters = chapters;
+      await DB.put(rec);
+      state.books.push({ id, title, author, chars: text.length, text, chapters });
       ok++;
     } catch (err) {
       console.warn('import failed', f.name, err);
+      bad++;
+      lastError = `${f.name}：${err.message || err}`;
     }
   }
   setImporting(false);
   renderShelf();
   e.target.value = '';
-  toast(ok ? `已导入 ${ok} 本` : '导入失败，请确认为 UTF-8 编码的 .txt', 2200);
+
+  if (ok && !bad) toast(`已导入 ${ok} 本`, 2400);
+  else if (ok && bad) toast(`已导入 ${ok} 本，${bad} 本失败`, 3200);
+  else toast(lastError ? `导入失败：${lastError}` : '导入失败，请确认为 UTF-8 的 .txt 或标准 .epub', 3600);
 };
 
 let importing = false;
@@ -971,18 +1468,52 @@ function setImporting(on) {
   btn?.classList.toggle('busy', on);
 }
 
-// 键盘：← → 切章
+// 键盘：方向键 / 空格翻页
+const keyTarget = () => document.activeElement;
 document.addEventListener('keydown', e => {
   if ($('#reader').hidden) return;
-  if (e.key === 'ArrowRight' || e.key === 'PageDown') goChapter(state.idx + 1);
-  if (e.key === 'ArrowLeft'  || e.key === 'PageUp')   goChapter(state.idx - 1);
-  if (e.key === 'Escape') closeDrawer() || closeSheet();
+  const tag = keyTarget()?.tagName;
+  if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+
+  if (e.key === 'ArrowRight' || e.key === 'PageDown' || (e.key === ' ' && !e.shiftKey)) {
+    e.preventDefault(); nextPage(); return;
+  }
+  if (e.key === 'ArrowLeft' || e.key === 'PageUp' || (e.key === ' ' && e.shiftKey)) {
+    e.preventDefault(); prevPage(); return;
+  }
+  if (e.key === 'Escape') {
+    if (!$('#drawer').hidden) return closeDrawer();
+    if (!$('#sheet').hidden || !$('#statsSheet').hidden) return closeSheet();
+    return;
+  }
 });
 
-// 轻触隐藏/显示工具栏（点击正文区域）
-$('#pageScroll').addEventListener('click', e => {
-  if (e.target.closest('.end-cap button')) return;
-  showChrome(!state.chromeOn);
+/* ════════ 三分区点击 ════════ */
+const ZONE_LEFT = 0.3, ZONE_RIGHT = 0.3;
+let tapStart = null, tapMoved = false;
+const scEl = $('#pageScroll');
+
+scEl.addEventListener('pointerdown', e => {
+  tapStart = { x: e.clientX, y: e.clientY };
+  tapMoved = false;
+}, { passive: true });
+
+scEl.addEventListener('pointermove', e => {
+  if (!tapStart) return;
+  if (Math.abs(e.clientX - tapStart.x) > 10 || Math.abs(e.clientY - tapStart.y) > 10) tapMoved = true;
+}, { passive: true });
+
+scEl.addEventListener('click', e => {
+  if (e.target.closest('.end-cap button')) return;      // 章末按钮自己管
+  if (tapMoved) { tapMoved = false; return; }           // 滑动不是点击
+  const sel = window.getSelection && String(window.getSelection());
+  if (sel && sel.trim()) return;                       // 选了字就不当翻页
+
+  const r = scEl.getBoundingClientRect();
+  const x = (e.clientX - r.left) / Math.max(1, r.width);
+  if (x < ZONE_LEFT) prevPage();
+  else if (x > 1 - ZONE_RIGHT) nextPage();
+  else toggleChrome();
 });
 
 /* 启动 */

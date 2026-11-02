@@ -127,10 +127,11 @@ public class MainActivity extends Activity {
                 Intent i = new Intent(Intent.ACTION_GET_CONTENT);
                 i.addCategory(Intent.CATEGORY_OPENABLE);
                 i.setType("*/*");
-                i.putExtra(Intent.EXTRA_MIME_TYPES, new String[]{"text/plain", "text/*"});
+                i.putExtra(Intent.EXTRA_MIME_TYPES, new String[]{
+                        "text/plain", "text/*", "application/epub+zip"});
                 i.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
                 try {
-                    startActivityForResult(Intent.createChooser(i, "选择 TXT"), REQ_FILE);
+                    startActivityForResult(Intent.createChooser(i, "选择 TXT / EPUB"), REQ_FILE);
                     return true;
                 } catch (Exception e) {
                     fileCallback = null;
@@ -218,6 +219,7 @@ public class MainActivity extends Activity {
         if (p.endsWith(".js")) return "application/javascript";
         if (p.endsWith(".json")) return "application/json";
         if (p.endsWith(".txt")) return "text/plain";
+        if (p.endsWith(".epub")) return "application/epub+zip";
         if (p.endsWith(".png")) return "image/png";
         if (p.endsWith(".svg")) return "image/svg+xml";
         if (p.endsWith(".woff2")) return "font/woff2";
@@ -237,7 +239,7 @@ public class MainActivity extends Activity {
 
         @JavascriptInterface
         public String version() {
-            return "1.0";
+            return "1.1";
         }
     }
 }
