@@ -1413,6 +1413,31 @@ function readAsText(f) {
   });
 }
 
+/**
+ * 按字节猜编码再解码。
+ * 先按 UTF-16 BOM、再按严格 UTF-8（fatal 模式）试，都不行就走 GBK/GB18030/Big5。
+ * 中文 TXT 里 GBK 占相当比例，直接当 UTF-8 读会整本变问号。
+ */
+async function readTextSmart(f) {
+  const buf = await readAsArrayBuffer(f);
+  const bytes = new Uint8Array(buf);
+
+  if (bytes[0] === 0xFF && bytes[1] === 0xFE) return new TextDecoder('utf-16le').decode(bytes.subarray(2));
+  if (bytes[0] === 0xFE && bytes[1] === 0xFF) return new TextDecoder('utf-16be').decode(bytes.subarray(2));
+
+  try {
+    return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+  } catch { /* 不是 UTF-8，往下试 */ }
+
+  for (const enc of ['gb18030', 'gbk', 'big5']) {
+    try {
+      const t = new TextDecoder(enc).decode(bytes);
+      if (t && t.indexOf('\uFFFD') === -1) return t;
+    } catch { /* 这个编码不支持就跳 */ }
+  }
+  return new TextDecoder('utf-8').decode(bytes);
+}
+
 $('#fileInput').onchange = async e => {
   const files = [...(e.target.files || [])];
   if (!files.length) return;
@@ -1432,7 +1457,7 @@ $('#fileInput').onchange = async e => {
         title = book.title || f.name.replace(/\.[^.]+$/, '');
         author = book.author || 'EPUB';
       } else {
-        text = cleanText(await readAsText(f));
+        text = cleanText(await readTextSmart(f));
         title = f.name.replace(/\.(txt|text)$/i, '');
         author = '本地导入';
       }
