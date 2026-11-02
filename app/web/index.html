@@ -63,6 +63,9 @@
       <div class="book-title" id="rBookTitle"></div>
       <div class="chapter-title" id="rChapterTitle"></div>
     </div>
+    <button class="icon" id="bmBtn" aria-label="加书签">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M7 4h10a1 1 0 011 1v15l-6-4-6 4V5a1 1 0 011-1z"/></svg>
+    </button>
     <button class="icon" id="formatBtn" aria-label="版式"><span class="aa">Aa</span></button>
     <button class="icon" id="tocBtn" aria-label="目录">
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h10"/></svg>
@@ -89,7 +92,10 @@
 <div class="drawer-mask" id="drawerMask" hidden></div>
 <aside class="drawer" id="drawer" hidden>
   <div class="drawer-head">
-    <h2>目录</h2>
+    <div class="drawer-tabs">
+      <button class="drawer-tab on" id="tabToc" type="button">目录</button>
+      <button class="drawer-tab" id="tabBm" type="button">书签<span id="bmCount"></span></button>
+    </div>
     <button class="ghost-btn" id="statsBtn" type="button">时光</button>
     <button class="icon" id="drawerClose" aria-label="关闭">
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
@@ -99,6 +105,7 @@
     <input type="search" id="tocSearch" placeholder="搜索章节" autocomplete="off">
   </div>
   <ol class="toc-list" id="tocList"></ol>
+  <ol class="toc-list" id="bmList" hidden></ol>
 </aside>
 
 <!-- ══════════ 阅读时光 ══════════ -->
@@ -139,8 +146,9 @@
 
   <div class="row">
     <span class="row-label">字体</span>
-    <div class="seg" id="fontSeg">
-      <button data-font="serif" class="on" type="button">宋</button>
+    <div class="seg seg-4" id="fontSeg">
+      <button data-font="system" class="on" type="button">系统</button>
+      <button data-font="serif" type="button">宋</button>
       <button data-font="sans" type="button">黑</button>
       <button data-font="kai" type="button">楷</button>
     </div>

@@ -18,11 +18,13 @@
   --font-read: "Songti SC", "Noto Serif SC", "Source Han Serif SC", Georgia, "Times New Roman", serif;
   --font-ui:   -apple-system, BlinkMacSystemFont, "PingFang SC", "Helvetica Neue", "Segoe UI", sans-serif;
   --font-kai:  "Kaiti SC", "STKaiti", "KaiTi", "Noto Serif SC", serif;
+  --font-system: system-ui, -apple-system, "PingFang SC", "Hiragino Sans GB",
+                 "Microsoft YaHei", "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
 
   --fs: 17px;
   --lh: 1.88;
   --pad: 28px;
-  --read-font: var(--font-read);
+  --read-font: var(--font-system);
 }
 
 html[data-theme="warm"] {
@@ -962,4 +964,150 @@ html[data-theme="night"] .sleep-nudge { background: rgba(27,26,22,.9); border-co
   font-weight: 500;
   font-family: var(--font-read);
   white-space: nowrap;
+}
+
+
+/* ═══════════ 书签 ═══════════ */
+
+.icon.on { color: var(--accent); }
+.icon.on svg path { fill: color-mix(in srgb, var(--accent) 22%, transparent); fill: rgba(180,89,58,.22); }
+
+/* 抽屉 tabs */
+.drawer-tabs { display: flex; align-items: baseline; gap: 16px; }
+.drawer-tab {
+  position: relative;
+  padding: 2px 0 6px;
+  border: 0;
+  background: transparent;
+  font-family: var(--font-read);
+  font-size: 17px;
+  font-weight: 500;
+  letter-spacing: .04em;
+  color: var(--text-3);
+  cursor: pointer;
+  transition: color .2s ease;
+}
+.drawer-tab.on { color: var(--text); }
+.drawer-tab.on::after {
+  content: '';
+  position: absolute;
+  left: 0; right: 0; bottom: 0;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--accent);
+}
+#bmCount {
+  display: inline-block;
+  margin-left: 4px;
+  font-family: var(--font-ui);
+  font-size: 10.5px;
+  color: var(--text-3);
+  vertical-align: super;
+}
+#bmCount:empty { display: none; }
+
+/* 书签条目 */
+.bm-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 13px 20px 13px 24px;
+  cursor: pointer;
+  border-left: 2px solid transparent;
+  transition: background .16s ease, border-color .16s ease;
+}
+.bm-item:hover { background: var(--bg-soft); }
+.bm-item:active { background: var(--bg-soft); }
+
+.bm-mark { flex-shrink: 0; color: var(--accent); opacity: .8; padding-top: 3px; }
+
+.bm-body { flex: 1; min-width: 0; }
+.bm-ch {
+  font-family: var(--font-read);
+  font-size: 14px;
+  color: var(--text);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.bm-quote {
+  margin-top: 4px;
+  font-family: var(--font-read);
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--text-3);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.bm-time {
+  margin-top: 5px;
+  font-size: 10.5px;
+  letter-spacing: .04em;
+  color: var(--text-3);
+  opacity: .75;
+  font-variant-numeric: tabular-nums;
+}
+
+.bm-del {
+  flex-shrink: 0;
+  width: 30px; height: 30px;
+  display: grid; place-items: center;
+  border: 0; border-radius: 9px;
+  background: transparent;
+  color: var(--text-3);
+  cursor: pointer;
+  opacity: .5;
+  transition: all .18s ease;
+}
+.bm-del:hover { opacity: 1; color: var(--accent); background: var(--accent-soft); }
+
+/* 空态 */
+.bm-empty {
+  padding: 56px 28px;
+  text-align: center;
+  color: var(--text-3);
+  font-size: 12.5px;
+  line-height: 2;
+}
+.bm-empty b { display: block; color: var(--text-2); font-weight: 500; margin-bottom: 6px; font-family: var(--font-read); font-size: 14px; }
+
+/* 四段字体 */
+.seg.seg-4 button { min-width: 0; padding: 0 11px; font-family: var(--font-system); font-size: 12.5px; }
+
+/* 书签落点高亮 */
+.bm-flash {
+  animation: bmFlash 1.6s ease;
+  border-radius: 4px;
+}
+@keyframes bmFlash {
+  0%, 100% { background: transparent; }
+  18% { background: rgba(180,89,58,.12); box-shadow: 0 0 0 6px rgba(180,89,58,.12); }
+}
+
+/* 书架空态 */
+.shelf-empty {
+  padding: 72px 25px 60px;
+  text-align: center;
+  color: var(--text-3);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+.shelf-empty b {
+  font-family: var(--font-read);
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--text-2);
+  letter-spacing: .04em;
+}
+.shelf-empty p {
+  font-size: 12.5px;
+  line-height: 2;
+  color: var(--text-3);
+}
+.shelf-empty em {
+  font-style: normal;
+  color: var(--accent);
+  padding: 0 1px;
 }

@@ -13,6 +13,7 @@ books/*
 !books/README.md
 app/web/books/*.txt
 app/web/books/*.epub
+!app/web/books/sample.txt
 
 # Git 备份包
 *.bundle

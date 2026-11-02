@@ -17,6 +17,8 @@ Android 6.0+ 可直接安装，也可以直接在浏览器里打开网页版。
 - **三主题** — 纸 / 米 / 夜，状态栏同步变色
 - **版式面板** — 字号 13–28、行距、边距、宋/黑/楷三体，实时生效并记忆
 - **目录** — 全文分章、即时搜索、当前章高亮
+- **书签** — 顶栏一键标记，记录章节 / 字符位置 / 添加时间 / 原文摘录；侧栏书签页一键跳回
+- **字体** — 系统字体（PingFang SC / 微软雅黑 / system-ui）· 宋 · 黑 · 楷，字号 13–28、行距、边距均可调
 - **进度** — 每本书独立记忆章节与滚动位置
 
 ### 阅读时间引擎
@@ -75,6 +77,10 @@ Android 6.0+ 可直接安装，也可以直接在浏览器里打开网页版。
 |---|---|---|
 | ![toc](app/apk/preview/toc-time.png) | ![endnote](app/apk/preview/endnote.png) | ![stats](app/apk/preview/stats.png) |
 
+| 书签 | 字体设置 | 空书架 |
+|---|---|---|
+| ![bookmarks](app/apk/preview/bookmarks.png) | ![fonts](app/apk/preview/fonts.png) | ![empty](app/apk/preview/empty.png) |
+
 ---
 
 ## 项目结构
@@ -105,13 +111,18 @@ python3 -m http.server 8099
 # 打开 http://127.0.0.1:8099
 ```
 
-内置书目读的是 `app/web/books/*.txt`。仓库里**不含**任何书籍内容，自己丢两本进去，或者改 `app/web/app.js` 顶部的 `BUILTIN` 数组：
+仓库里**只带一本公有领域示例**：`app/web/books/sample.txt`，《道德经》节选（老子，先秦，公版）。
+
+想换成自己的书，改 `app/web/app.js` 顶部的数组：
 
 ```js
 const BUILTIN = [
-  { id: 'b-1', title: '书名', author: '作者', file: 'books/your-book.txt' },
+  { id: 'b-sample', title: '道德经（节选）', author: '老子 · 公版示例', file: 'books/sample.txt' },
+  // { id: 'b-1', title: '书名', author: '作者', file: 'books/your-book.txt' },
 ];
 ```
+
+或者直接把书架清空 —— 会看到「暂无书籍，点击下方导入」的空态。
 
 导入的 TXT 存在 IndexedDB，长按书目可移除。
 
@@ -174,6 +185,16 @@ Noto Serif SC 的中文子集约 3MB（400/600 两档），覆盖约 4900 个常
 **没有 color-mix 的旧 WebView**
 
 样式里所有 `color-mix()` 前面都写了一条 `rgba()` 兜底，Chrome < 111 走退化值，功能不受影响。
+
+**书签怎么定位**
+
+渲染正文时给每个 `<p>` 打上 `data-off`（段首在全书中的字符偏移），书签存的就是这个偏移：
+
+```js
+{ off: 69, ch: 0, chTitle: "第一章 道可道", quote: "故常无欲以观其妙…", at: 1793586083830 }
+```
+
+同一段落内不会重复加书签（比较 `data-off` 精确相等），跳转后命中的段落会闪一下高亮。全存在 `localStorage` 的 `reader.bookmarks.v1`。
 
 **状态栏跟随主题**
 

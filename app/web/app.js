@@ -7,14 +7,15 @@ const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 
 /* ── 内置书目（打包时随 APK 分发） ── */
 const BUILTIN = [
-  { id: 'b-yemu',  title: '夜幕之下',  author: '三九音域', file: 'books/夜幕之下.txt' },
-  { id: 'b-longzu', title: '龙族全集', author: '江南',     file: 'books/龙族全集.txt' },
+  { id: 'b-sample', title: '道德经（节选）', author: '老子 · 公版示例', file: 'books/sample.txt' },
 ];
 
 const LS = {
   settings: 'reader.settings.v1',
   progress: 'reader.progress.v1',
   shelf:    'reader.shelf.v1',
+  bookmarks:'reader.bookmarks.v1',
+  chapRecs: 'reader.chaps.v1',
 };
 
 /* ── 状态 ── */
@@ -77,7 +78,7 @@ const DB = (() => {
 })();
 
 /* ════════ 设置 ════════ */
-const DEFAULTS = { fs: 17, lh: 188, pad: 28, font: 'serif', theme: 'paper' };
+const DEFAULTS = { fs: 17, lh: 188, pad: 28, font: 'system', theme: 'paper' };
 let settings = { ...DEFAULTS, ...JSON.parse(localStorage.getItem(LS.settings) || '{}') };
 
 function applySettings() {
@@ -86,8 +87,9 @@ function applySettings() {
   root.style.setProperty('--lh', settings.lh / 100);
   root.style.setProperty('--pad', settings.pad + 'px');
   root.style.setProperty('--read-font',
-    settings.font === 'sans' ? 'var(--font-ui)' :
-    settings.font === 'kai'  ? 'var(--font-kai)' : 'var(--font-read)');
+    settings.font === 'sans'   ? 'var(--font-ui)' :
+    settings.font === 'kai'    ? 'var(--font-kai)' :
+    settings.font === 'serif'  ? 'var(--font-read)' : 'var(--font-system)');
   root.dataset.theme = settings.theme;
 
   $('#fontVal').textContent = settings.fs;
@@ -139,8 +141,11 @@ function renderChapter(i) {
   const body = state.text.slice(ch.start, ch.end);
   const frag = document.createDocumentFragment();
 
-  for (const line of body.split(/\r?\n/)) {
-    const s = line.trim();
+  let cursor = ch.start;              // 当前段在全书中的字符偏移
+  for (const raw of body.split(/\r?\n/)) {
+    const s = raw.trim();
+    const lineStart = cursor;
+    cursor += raw.length + 1;         // 换行符占 1
     if (!s) continue;
     if (s.length <= 40 && CH_TITLE.test(s)) {
       const h = document.createElement('div');
@@ -152,6 +157,7 @@ function renderChapter(i) {
     if (/^[=\-*~·—]{3,}$/.test(s)) continue;
     const p = document.createElement('p');
     p.textContent = s;
+    p.dataset.off = lineStart + raw.indexOf(s);   // 段首在全书中的偏移
     frag.appendChild(p);
   }
 
@@ -191,7 +197,180 @@ function renderChapter(i) {
   updateProgressUI();
   renderTocCurrent();
   markLastRead();
+  refreshBmBtn();
   maybeSleepNudge();
+}
+
+
+/* ════════ 书签 ════════ */
+let bookmarks = JSON.parse(localStorage.getItem(LS.bookmarks) || '{}');
+// { bookId: [{ ch, off, quote, at }] }
+function saveMarks() { localStorage.setItem(LS.bookmarks, JSON.stringify(bookmarks)); }
+function marksOf(id) { return bookmarks[id] || (bookmarks[id] = []); }
+
+/** 当前阅读位置对应的段落 */
+function currentPara() {
+  const sc = $('#pageScroll');
+  const line = parseInt(getComputedStyle($('#page')).lineHeight) || 32;
+  const y = sc.scrollTop + sc.clientHeight * 0.28;   // 取视野上三分之一处作为"当前位置"
+  const ps = $$('#page p');
+  let best = ps[0] || null;
+  for (const p of ps) {
+    const top = p.offsetTop - $('#page').offsetTop;
+    if (top <= y) best = p; else break;
+  }
+  return best;
+}
+
+function currentOffset() {
+  const p = currentPara();
+  if (p) return parseInt(p.dataset.off, 10) || 0;
+  const ch = state.chapters[state.idx];
+  return ch ? ch.start : 0;
+}
+
+function offsetChapter(off) {
+  let i = 0;
+  for (let k = 0; k < state.chapters.length; k++) {
+    if (off >= state.chapters[k].start) i = k; else break;
+  }
+  return i;
+}
+
+/** 当前段落是否已加书签 */
+function isMarkedHere() {
+  const p = currentPara();
+  if (!p) return false;
+  const off = parseInt(p.dataset.off, 10) || 0;
+  return marksOf(state.book.id).some(m => m.off === off);
+}
+
+function refreshBmBtn() {
+  const on = isMarkedHere();
+  $('#bmBtn').classList.toggle('on', on);
+  $('#bmBtn').setAttribute('aria-label', on ? '取消书签' : '加书签');
+}
+
+function toggleBookmark() {
+  if (!state.book) return;
+  const paraEl = currentPara();
+  const off = paraEl ? (parseInt(paraEl.dataset.off, 10) || 0) : currentOffset();
+  const list = marksOf(state.book.id);
+  const hit = list.findIndex(m => m.off === off);
+
+  if (hit >= 0) {
+    list.splice(hit, 1);
+    saveMarks();
+    refreshBmBtn(); renderBmCount();
+    toast('已取消书签', 1500);
+    return;
+  }
+
+  const p = currentPara();
+  const quote = (p?.textContent || '').slice(0, 48);
+  list.push({
+    off,
+    ch: state.idx,
+    chTitle: state.chapters[state.idx].title,
+    quote,
+    at: Date.now(),
+  });
+  list.sort((a, b) => a.off - b.off);
+  saveMarks();
+  refreshBmBtn(); renderBmCount();
+  toast('已加入书签', 1500);
+}
+
+/** 跳到书签位置，并把命中的那一段闪一下 */
+function gotoMark(m) {
+  const idx = (m.ch != null && state.chapters[m.ch]) ? m.ch : offsetChapter(m.off);
+  goChapter(idx);
+  requestAnimationFrame(() => {
+    const ps = $$('#page p');
+    const hit = ps.find(p => (parseInt(p.dataset.off, 10) || 0) === m.off)
+             || ps.find(p => Math.abs((parseInt(p.dataset.off, 10) || 0) - m.off) < 200);
+    if (hit) {
+      const sc = $('#pageScroll');
+      sc.scrollTop += hit.getBoundingClientRect().top - sc.getBoundingClientRect().top - 120;
+      hit.classList.add('bm-flash');
+      setTimeout(() => hit.classList.remove('bm-flash'), 1700);
+    }
+  });
+}
+
+function renderBmCount() {
+  const n = state.book ? marksOf(state.book.id).length : 0;
+  $('#bmCount').textContent = n ? String(n) : '';
+}
+
+function fmtWhen(ts) {
+  const d = new Date(ts);
+  const now = new Date();
+  const sameDay = d.toDateString() === now.toDateString();
+  const hm = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  if (sameDay) return `今天 ${hm}`;
+  const yest = new Date(now.getTime() - 864e5);
+  if (d.toDateString() === yest.toDateString()) return `昨天 ${hm}`;
+  return `${d.getMonth() + 1} 月 ${d.getDate()} 日 ${hm}`;
+}
+
+function renderBookmarks() {
+  const box = $('#bmList');
+  const list = state.book ? marksOf(state.book.id) : [];
+  box.replaceChildren();
+
+  if (!list.length) {
+    const em = document.createElement('li');
+    em.className = 'bm-empty';
+    em.innerHTML = '<b>还没有书签</b>阅读时点右上角的书签图标，标记你舍不得走的那一段。';
+    box.appendChild(em);
+    renderBmCount();
+    return;
+  }
+
+  for (const m of list.slice().sort((a, b) => b.at - a.at)) {
+    const li = document.createElement('li');
+    li.className = 'bm-item';
+
+    const mark = document.createElement('span');
+    mark.className = 'bm-mark';
+    mark.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><path d="M7 4h10a1 1 0 011 1v15l-6-4-6 4V5a1 1 0 011-1z"/></svg>';
+
+    const body = document.createElement('div');
+    body.className = 'bm-body';
+
+    const ch = document.createElement('div');
+    ch.className = 'bm-ch';
+    ch.textContent = m.chTitle || state.chapters[m.ch]?.title || '未命名章节';
+
+    const q = document.createElement('div');
+    q.className = 'bm-quote';
+    q.textContent = m.quote || '';
+
+    const t = document.createElement('div');
+    t.className = 'bm-time';
+    t.textContent = fmtWhen(m.at);
+
+    body.append(ch, q, t);
+
+    const del = document.createElement('button');
+    del.className = 'bm-del';
+    del.setAttribute('aria-label', '删除书签');
+    del.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>';
+    del.onclick = (e) => {
+      e.stopPropagation();
+      const arr = marksOf(state.book.id);
+      const i = arr.indexOf(m);
+      if (i >= 0) arr.splice(i, 1);
+      saveMarks();
+      renderBookmarks(); refreshBmBtn();
+    };
+
+    li.append(mark, body, del);
+    li.onclick = () => { gotoMark(m); closeDrawer(); };
+    box.appendChild(li);
+  }
+  renderBmCount();
 }
 
 /* ════════ 字数与时间预估 ════════ */
@@ -319,6 +498,7 @@ async function openBook(id) {
 
   $('#rBookTitle').textContent = meta.title;
   buildToc();
+  renderBookmarks();
   renderChapter(startIdx);
   showChrome(true);
 }
@@ -389,6 +569,7 @@ $('#pageScroll').addEventListener('scroll', () => {
   requestAnimationFrame(() => {
     rafPending = false;
     updateProgressUI();
+    refreshBmBtn();
     if (state.book) Pace.onScroll($('#pageScroll'), state.book.id);
   });
 }, { passive: true });
@@ -504,9 +685,17 @@ function renderShelf() {
   if (!state.books.length) {
     const empty = document.createElement('div');
     empty.className = 'shelf-empty';
-    empty.textContent = '书架空着。点下面导入一本 TXT。';
+    empty.innerHTML = `
+      <svg width="46" height="46" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+           stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round" style="opacity:.45">
+        <path d="M4 5.5A1.5 1.5 0 015.5 4H10a2 2 0 012 2v13a1.6 1.6 0 00-1.6-1.6H4z"/>
+        <path d="M20 5.5A1.5 1.5 0 0018.5 4H14a2 2 0 00-2 2v13a1.6 1.6 0 011.6-1.6H20z"/>
+      </svg>
+      <b>暂无书籍</b>
+      <p>点击下方 <em>导入</em>，选择手机里的 .txt 文件<br>导入后永远不会上传，全部留在本机</p>`;
     list.replaceChildren(empty);
-    $('#shelfSub').textContent = '0 本';
+    $('#shelfSub').textContent = '0 本 · 本地';
+    refreshDock();
     return;
   }
 
@@ -717,7 +906,23 @@ function closeStats() {
 $('#statsBtn').onclick = openStats;
 $('#statsMask').onclick = closeStats;
 
-$('#tocBtn').onclick  = openDrawer;
+$('#bmBtn').onclick = toggleBookmark;
+
+/* 目录 / 书签 切换 */
+function setDrawerTab(which) {
+  const isBm = which === 'bm';
+  $('#tabToc').classList.toggle('on', !isBm);
+  $('#tabBm').classList.toggle('on', isBm);
+  $('#tocList').hidden = isBm;
+  $('#bmList').hidden = !isBm;
+  $('.drawer-search').style.display = isBm ? 'none' : '';
+  if (isBm) renderBookmarks();
+  else { $('#tocSearch').value = ''; $$('#tocList .toc-item').forEach(el => el.hidden = false); fillTocTimes(); renderTocCurrent(); }
+}
+$('#tabToc').onclick = () => setDrawerTab('toc');
+$('#tabBm').onclick = () => setDrawerTab('bm');
+
+$('#tocBtn').onclick = () => { setDrawerTab('toc'); openDrawer(); };
 $('#formatBtn').onclick = openSheet;
 $('#drawerClose').onclick = closeDrawer;
 $('#statsBtn').addEventListener('click', () => closeDrawer());
@@ -732,16 +937,39 @@ $('#chromeBottom').onclick = (e) => {
 
 $('#importBtn').onclick = () => $('#fileInput').click();
 $('#fileInput').onchange = async e => {
-  for (const f of e.target.files) {
-    const text = await f.text();
-    const id = 'u-' + Date.now() + '-' + Math.random().toString(36).slice(2, 7);
-    const title = f.name.replace(/\.txt$/i, '');
-    await DB.put({ id, title, author: '导入', text });
-    state.books.push({ id, title, author: '导入', chars: text.length, text });
+  const files = [...(e.target.files || [])];
+  if (!files.length) return;
+  setImporting(true);
+  let ok = 0;
+  for (const f of files) {
+    try {
+      const raw = await f.text();
+      // 去掉 BOM，统一换行
+      const text = raw.replace(/^\uFEFF/, '').replace(/\r\n?/g, '\n');
+      if (!text.trim()) continue;
+      const id = 'u-' + Date.now() + '-' + Math.random().toString(36).slice(2, 7);
+      const title = f.name.replace(/\.(txt|text)$/i, '');
+      await DB.put({ id, title, author: '本地导入', text });
+      state.books.push({ id, title, author: '本地导入', chars: text.length, text });
+      ok++;
+    } catch (err) {
+      console.warn('import failed', f.name, err);
+    }
   }
+  setImporting(false);
   renderShelf();
   e.target.value = '';
+  toast(ok ? `已导入 ${ok} 本` : '导入失败，请确认为 UTF-8 编码的 .txt', 2200);
 };
+
+let importing = false;
+function setImporting(on) {
+  importing = on;
+  const btn = $('#importBtn');
+  const sub = btn?.querySelector('.dock-sub');
+  if (sub) sub.textContent = on ? '导入中…' : '本地 TXT';
+  btn?.classList.toggle('busy', on);
+}
 
 // 键盘：← → 切章
 document.addEventListener('keydown', e => {
