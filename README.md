@@ -16,7 +16,7 @@ Android 6.0+ 可直接安装，也可以直接在浏览器里打开网页版。
 - **导入** — 本地 `.txt` 与 `.epub`，全部留在本机，不上传
   - TXT：自动识别编码（UTF-8 / GBK / GB18030 / Big5 / UTF-16），按 `第X章` / `第X回` / `第X卷` / `序章` / `楔子` / `番外` / `Chapter N` 自动分章；导入时一次性净化正文（去 BOM、合并多余空行、去分隔线、去行首尾空白）
   - EPUB：自带 zip+DEFLATE 解析器（不依赖 `DecompressionStream`，老 WebView 也能用），目录优先取 `toc.ncx` / `nav.xhtml`，取不到再用正文首个标题
-- **正文排版** — 宋体栈（打包内置 Noto Serif SC 子集）、首行缩进 2em、两端对齐、17px / 行高 1.88
+- **正文排版** — 宋体栈（系统宋体，缺失时回落 Noto Serif / serif）、首行缩进 2em、两端对齐、17px / 行高 1.88
 - **两种阅读方式** — *滑动*（连续滚动）或 *翻页*（一屏一页），设置面板里随时换，位置不丢
 - **三分区点击** — 左 30% 上一页 / 右 30% 下一页 / 中间呼出工具栏；拖动和选中文字不算点击
 - **五主题** — 跟（跟随系统）/ 纸 / 米 / 夜 / 黑（OLED 纯黑），状态栏同步变色
@@ -111,9 +111,13 @@ Android 6.0+ 可直接安装，也可以直接在浏览器里打开网页版。
 |---|---|---|
 | ![toc](app/apk/preview/toc-time.png) | ![endnote](app/apk/preview/endnote.png) | ![stats](app/apk/preview/stats.png) |
 
-| 书签 | 字体设置 | 空书架 |
+| 书签 | 宋体正文 | 纯黑 OLED |
 |---|---|---|
-| ![bookmarks](app/apk/preview/bookmarks.png) | ![fonts](app/apk/preview/fonts.png) | ![empty](app/apk/preview/empty.png) |
+| ![bookmarks](app/apk/preview/bookmarks.png) | ![serif](app/apk/preview/serif.png) | ![oled](app/apk/preview/oled.png) |
+
+| 版式面板（翻页 / 五主题） | 空书架 |
+|---|---|
+| ![fonts](app/apk/preview/fonts.png) | ![empty](app/apk/preview/empty.png) |
 
 ---
 

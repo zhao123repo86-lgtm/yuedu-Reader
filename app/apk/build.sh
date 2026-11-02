@@ -14,7 +14,7 @@ export JAVA_HOME="$JDK"
 export PATH="$JDK/bin:$PATH"
 
 NAME="yue-reader"
-VER="1.0"
+VER="1.1"
 OUT="$PROJ/build"
 
 rm -rf "$OUT"
