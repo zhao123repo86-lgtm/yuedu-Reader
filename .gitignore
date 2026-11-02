@@ -1,0 +1,36 @@
+# 构建产物
+*.apk
+*.aab
+*.keystore
+*.jks
+build/
+app/apk/assets/
+app/apk/build/
+
+# 书籍正文（不随仓库分发，版权原因）
+books/*
+!books/.gitkeep
+!books/README.md
+app/web/books/*.txt
+app/web/books/*.epub
+
+# Git 备份包
+*.bundle
+
+# 字体（体积大，自行放置）
+app/web/fonts/
+app/apk/assets/fonts/
+
+# 系统 / 编辑器
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.iml
+__pycache__/
+*.pyc
+node_modules/
+
+# 爬虫中间产物
+*.parts/
+raw/

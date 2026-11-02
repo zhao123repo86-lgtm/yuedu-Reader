@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="paper">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1">
+<meta name="theme-color" content="#F7F6F2">
+<title>阅 · Reader</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<!-- ══════════ 书架 ══════════ -->
+<section id="shelf" class="view shelf">
+
+  <nav class="shelf-nav" id="shelfNav">
+    <h1>书房 <span class="alias">轩哥，梦想哭了 😂</span></h1>
+    <span class="nav-count" id="shelfSub">载入中</span>
+  </nav>
+
+  <ul class="book-list" id="bookList"></ul>
+
+  <div class="dock-wrap">
+    <div class="dock glass" id="dock">
+      <button class="dock-btn" id="continueBtn" type="button">
+        <span class="dock-ico">
+          <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M4 5.5A1.5 1.5 0 015.5 4H10a2 2 0 012 2v13a1.6 1.6 0 00-1.6-1.6H4z"/>
+            <path d="M20 5.5A1.5 1.5 0 0018.5 4H14a2 2 0 00-2 2v13a1.6 1.6 0 011.6-1.6H20z"/>
+          </svg>
+        </span>
+        <span class="dock-txt">
+          <span class="dock-label">继续阅读</span>
+          <span class="dock-sub" id="continueSub">—</span>
+        </span>
+      </button>
+
+      <span class="dock-div"></span>
+
+      <button class="dock-btn" id="importBtn" type="button">
+        <span class="dock-ico">
+          <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 16V4m0 0L8 8m4-4l4 4"/><path d="M4 16v2.5A1.5 1.5 0 005.5 20h13a1.5 1.5 0 001.5-1.5V16"/>
+          </svg>
+        </span>
+        <span class="dock-txt">
+          <span class="dock-label">导入</span>
+          <span class="dock-sub">本地 TXT</span>
+        </span>
+      </button>
+    </div>
+  </div>
+
+  <input type="file" id="fileInput" accept=".txt,text/plain" multiple hidden>
+</section>
+
+<!-- ══════════ 阅读 ══════════ -->
+<section id="reader" class="view reader" hidden>
+  <div class="chrome top glass" id="chromeTop">
+    <button class="icon" id="backBtn" aria-label="返回书架">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>
+    </button>
+    <div class="title-wrap">
+      <div class="book-title" id="rBookTitle"></div>
+      <div class="chapter-title" id="rChapterTitle"></div>
+    </div>
+    <button class="icon" id="formatBtn" aria-label="版式"><span class="aa">Aa</span></button>
+    <button class="icon" id="tocBtn" aria-label="目录">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h10"/></svg>
+    </button>
+  </div>
+
+  <main class="page-scroll" id="pageScroll">
+    <article class="page" id="page"><!-- 正文 --></article>
+    <div class="end-cap" id="endCap"></div>
+  </main>
+
+  <div class="chrome bottom glass" id="chromeBottom">
+    <span class="eta" id="etaLabel" role="button" tabindex="0"></span>
+    <span class="progress-label" id="progressLabel"></span>
+  </div>
+
+  <div class="toast" id="toast"></div>
+  <div class="sleep-nudge" id="sleepNudge" hidden></div>
+  <div class="progress-rail"><div class="progress-fill" id="progressFill"></div></div>
+
+</section>
+
+<!-- ══════════ 目录抽屉 ══════════ -->
+<div class="drawer-mask" id="drawerMask" hidden></div>
+<aside class="drawer" id="drawer" hidden>
+  <div class="drawer-head">
+    <h2>目录</h2>
+    <button class="ghost-btn" id="statsBtn" type="button">时光</button>
+    <button class="icon" id="drawerClose" aria-label="关闭">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+    </button>
+  </div>
+  <div class="drawer-search">
+    <input type="search" id="tocSearch" placeholder="搜索章节" autocomplete="off">
+  </div>
+  <ol class="toc-list" id="tocList"></ol>
+</aside>
+
+<!-- ══════════ 阅读时光 ══════════ -->
+<div class="sheet-mask" id="statsMask" hidden></div>
+<div class="sheet" id="statsSheet" hidden>
+  <div class="sheet-grip"></div>
+  <div class="stats-head">
+    <span class="stats-kicker">最近七天</span>
+    <span class="stats-total" id="statsTotal">—</span>
+  </div>
+  <div class="stats-bars" id="statsBars"></div>
+  <div class="stats-lines" id="statsLines"></div>
+</div>
+
+<!-- ══════════ 设置面板 ══════════ -->
+<div class="sheet-mask" id="sheetMask" hidden></div>
+<div class="sheet" id="sheet" hidden>
+  <div class="sheet-grip"></div>
+
+  <div class="row">
+    <span class="row-label">字号</span>
+    <div class="stepper">
+      <button id="fontMinus" type="button">A−</button>
+      <span class="stepper-val" id="fontVal">19</span>
+      <button id="fontPlus" type="button">A+</button>
+    </div>
+  </div>
+
+  <div class="row">
+    <span class="row-label">行距</span>
+    <input type="range" id="lineRange" min="150" max="230" step="5">
+  </div>
+
+  <div class="row">
+    <span class="row-label">边距</span>
+    <input type="range" id="padRange" min="16" max="64" step="4">
+  </div>
+
+  <div class="row">
+    <span class="row-label">字体</span>
+    <div class="seg" id="fontSeg">
+      <button data-font="serif" class="on" type="button">宋</button>
+      <button data-font="sans" type="button">黑</button>
+      <button data-font="kai" type="button">楷</button>
+    </div>
+  </div>
+
+  <div class="row">
+    <span class="row-label">主题</span>
+    <div class="seg" id="themeSeg">
+      <button data-theme="paper" class="on" type="button">纸</button>
+      <button data-theme="warm" type="button">米</button>
+      <button data-theme="night" type="button">夜</button>
+    </div>
+  </div>
+</div>
+
+<script src="pace.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
